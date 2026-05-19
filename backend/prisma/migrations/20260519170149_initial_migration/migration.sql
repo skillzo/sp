@@ -5,18 +5,19 @@ CREATE TYPE "GameType" AS ENUM ('COLOR_PREDICTION', 'DICE', 'WHEEL');
 CREATE TYPE "RoundStatus" AS ENUM ('OPEN', 'LOCKED', 'SETTLED');
 
 -- CreateTable
-CREATE TABLE "User" (
+CREATE TABLE "users" (
     "id" TEXT NOT NULL,
     "email" TEXT NOT NULL,
+    "passwordHash" TEXT NOT NULL,
     "mainBalance" DECIMAL(18,2) NOT NULL DEFAULT 0,
     "gamingBalance" DECIMAL(18,2) NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE "Round" (
+CREATE TABLE "rounds" (
     "id" TEXT NOT NULL,
     "gameType" "GameType" NOT NULL,
     "status" "RoundStatus" NOT NULL DEFAULT 'OPEN',
@@ -28,11 +29,11 @@ CREATE TABLE "Round" (
     "settlesAt" TIMESTAMP(3) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "Round_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "rounds_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE "Bet" (
+CREATE TABLE "bets" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "roundId" TEXT NOT NULL,
@@ -43,11 +44,11 @@ CREATE TABLE "Bet" (
     "won" BOOLEAN,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "Bet_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "bets_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE "HouseLedger" (
+CREATE TABLE "house_ledger" (
     "id" TEXT NOT NULL,
     "roundId" TEXT NOT NULL,
     "gameType" "GameType" NOT NULL,
@@ -56,23 +57,23 @@ CREATE TABLE "HouseLedger" (
     "houseProfit" DECIMAL(18,2) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "HouseLedger_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "house_ledger_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Bet_userId_roundId_key" ON "Bet"("userId", "roundId");
+CREATE UNIQUE INDEX "bets_userId_roundId_key" ON "bets"("userId", "roundId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "HouseLedger_roundId_key" ON "HouseLedger"("roundId");
+CREATE UNIQUE INDEX "house_ledger_roundId_key" ON "house_ledger"("roundId");
 
 -- AddForeignKey
-ALTER TABLE "Bet" ADD CONSTRAINT "Bet_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "bets" ADD CONSTRAINT "bets_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "Bet" ADD CONSTRAINT "Bet_roundId_fkey" FOREIGN KEY ("roundId") REFERENCES "Round"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "bets" ADD CONSTRAINT "bets_roundId_fkey" FOREIGN KEY ("roundId") REFERENCES "rounds"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "HouseLedger" ADD CONSTRAINT "HouseLedger_roundId_fkey" FOREIGN KEY ("roundId") REFERENCES "Round"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "house_ledger" ADD CONSTRAINT "house_ledger_roundId_fkey" FOREIGN KEY ("roundId") REFERENCES "rounds"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

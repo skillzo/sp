@@ -10,11 +10,14 @@ datasource db {
 model User {
   id            String   @id @default(uuid())
   email         String   @unique
+  passwordHash  String
   mainBalance   Decimal  @default(0) @db.Decimal(18, 2)
   gamingBalance Decimal  @default(0) @db.Decimal(18, 2)
   createdAt     DateTime @default(now())
 
   bets Bet[]
+
+  @@map("users")
 }
 
 model Round {
@@ -31,6 +34,8 @@ model Round {
 
   bets        Bet[]
   houseLedger HouseLedger?
+
+  @@map("rounds")
 }
 
 model Bet {
@@ -48,6 +53,7 @@ model Bet {
   round Round @relation(fields: [roundId], references: [id])
 
   @@unique([userId, roundId])
+  @@map("bets")
 }
 
 model HouseLedger {
@@ -60,6 +66,8 @@ model HouseLedger {
   createdAt   DateTime @default(now())
 
   round Round @relation(fields: [roundId], references: [id])
+
+  @@map("house_ledger")
 }
 
 enum GameType {

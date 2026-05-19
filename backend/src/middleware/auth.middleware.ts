@@ -1,13 +1,21 @@
 import type { RequestHandler } from "express";
+import { verifyAccessToken } from "../auth/auth.service.js";
 import { HttpError } from "../errors/httpError.js";
 
-/** Dev-friendly: send header `x-user-id: <uuid>`. Replace with JWT verify later. */
 export const authMiddleware: RequestHandler = (req, _res, next) => {
-  const userId = req.header("x-user-id")?.trim();
-  if (!userId) {
+  const header = req.header("authorization")?.trim();
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1];
+  if (!token) {
     next(new HttpError(401, "Unauthorized"));
     return;
   }
-  req.user = { id: userId };
-  next();
+
+  try {
+    const payload = verifyAccessToken(token);
+    req.user = { id: payload.sub, email: payload.email };
+    next();
+  } catch (e) {
+    next(e);
+  }
 };

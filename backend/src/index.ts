@@ -1,14 +1,17 @@
+import "dotenv/config";
 import express from "express";
-import { diceRouter } from "./routes/index.js";
+import { authRouter, diceRouter } from "./routes/index.js";
 import { startGameScheduler } from "./games/engine/scheduler.js";
 import {
   globalErrorHandler,
   prisma,
   verifyDatabaseConnection,
 } from "./startup/prisma.js";
+import { Env } from "./config/Env.js";
+import logger from "./startup/logger.js";
 
 const app = express();
-const port = Number(process.env.PORT ?? 3001);
+const port = Env.PORT;
 
 app.use(express.json());
 
@@ -25,6 +28,7 @@ app.get("/health/db", async (_req, res, next) => {
   }
 });
 
+app.use("/auth", authRouter);
 app.use("/games/dice", diceRouter);
 
 app.use(globalErrorHandler);
@@ -34,7 +38,7 @@ void verifyDatabaseConnection()
     startGameScheduler();
 
     const server = app.listen(port, () => {
-      console.log(`http://localhost:${port}`);
+      logger.info(`Server is running on port ${port}`);
     });
 
     const shutdown = async () => {
