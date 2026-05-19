@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  mainBalance   Decimal  @default(0) @db.Decimal(18, 2)
+  gamingBalance Decimal  @default(0) @db.Decimal(18, 2)
+  createdAt     DateTime @default(now())
+
+  bets Bet[]
+}
+
+model Round {
+  id             String      @id @default(uuid())
+  gameType       GameType // color, prediction, dice, wheel
+  status         RoundStatus @default(OPEN)
+  outcome        String? // "RED" | "3" | "SEGMENT_5" — always string
+  serverSeedHash String
+  serverSeed     String?
+  opensAt        DateTime
+  locksAt        DateTime
+  settlesAt      DateTime
+  createdAt      DateTime    @default(now())
+
+  bets        Bet[]
+  houseLedger HouseLedger?
+}
+
+model Bet {
+  id         String   @id @default(uuid())
+  userId     String
+  roundId    String
+  pick       String // what user chose: "RED" | "3" | "SEGMENT_5"
+  multiplier Decimal  @db.Decimal(8, 2) // locked at bet time
+  amount     Decimal  @db.Decimal(18, 2)
+  payout     Decimal? @db.Decimal(18, 2) // filled at settle
+  won        Boolean? // filled at settle
+  createdAt  DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  round Round @relation(fields: [roundId], references: [id])
+
+  @@unique([userId, roundId])
+}
+
+model HouseLedger {
+  id          String   @id @default(uuid())
+  roundId     String   @unique
+  gameType    GameType
+  totalBets   Decimal  @db.Decimal(18, 2)
+  totalPayout Decimal  @db.Decimal(18, 2)
+  houseProfit Decimal  @db.Decimal(18, 2)
+  createdAt   DateTime @default(now())
+
+  round Round @relation(fields: [roundId], references: [id])
+}
+
+enum GameType {
+  COLOR_PREDICTION
+  DICE
+  WHEEL
+}
+
+enum RoundStatus {
+  OPEN
+  LOCKED
+  SETTLED
+}

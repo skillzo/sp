@@ -1,0 +1,322 @@
+/* ========================================
+   RESPONSIVE BREAKPOINTS & UTILITIES
+   ======================================== */
+
+/* Mobile-first approach */
+/* Mobile: 375px - 767px (default) */
+/* Tablet: 768px - 1023px */
+/* Desktop: 1024px+ (1440px optimal) */
+
+/* ========================================
+   CONTAINER SYSTEM
+   ======================================== */
+
+.responsive-container {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Tablet breakpoint */
+@media (min-width: 768px) {
+  .responsive-container {
+    max-width: 768px;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+/* Desktop breakpoint */
+@media (min-width: 1024px) {
+  .responsive-container {
+    max-width: 1200px;
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+}
+
+/* Wide desktop */
+@media (min-width: 1440px) {
+  .responsive-container {
+    max-width: 1400px;
+  }
+}
+
+/* ========================================
+   GRID SYSTEM
+   ======================================== */
+
+.responsive-grid {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}
+
+/* 1 column on mobile (default) */
+.responsive-grid-1 {
+  grid-template-columns: 1fr;
+}
+
+/* 2 columns */
+.responsive-grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* Responsive 2-col: 1 on mobile, 2 on tablet+ */
+.responsive-grid-auto-2 {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 768px) {
+  .responsive-grid-auto-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Responsive 3-col: 1 on mobile, 2 on tablet, 3 on desktop */
+.responsive-grid-auto-3 {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 768px) {
+  .responsive-grid-auto-3 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-grid-auto-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Responsive 4-col: 2 on mobile, 3 on tablet, 4 on desktop */
+.responsive-grid-auto-4 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (min-width: 768px) {
+  .responsive-grid-auto-4 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-grid-auto-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ========================================
+   FLEX UTILITIES
+   ======================================== */
+
+.responsive-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Stack horizontal on tablet+ */
+.responsive-stack-tablet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 768px) {
+  .responsive-stack-tablet {
+    flex-direction: row;
+  }
+}
+
+/* Stack horizontal on desktop+ */
+.responsive-stack-desktop {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 1024px) {
+  .responsive-stack-desktop {
+    flex-direction: row;
+  }
+}
+
+/* ========================================
+   TEXT SIZING
+   ======================================== */
+
+.text-responsive-sm {
+  font-size: clamp(0.75rem, 2vw, 0.875rem);
+}
+
+.text-responsive-base {
+  font-size: clamp(0.875rem, 2.5vw, 1rem);
+}
+
+.text-responsive-lg {
+  font-size: clamp(1rem, 3vw, 1.125rem);
+}
+
+.text-responsive-xl {
+  font-size: clamp(1.125rem, 3.5vw, 1.25rem);
+}
+
+.text-responsive-2xl {
+  font-size: clamp(1.25rem, 4vw, 1.5rem);
+}
+
+.text-responsive-3xl {
+  font-size: clamp(1.5rem, 5vw, 1.875rem);
+}
+
+.text-responsive-4xl {
+  font-size: clamp(1.875rem, 6vw, 2.25rem);
+}
+
+/* ========================================
+   SPACING UTILITIES
+   ======================================== */
+
+.gap-responsive {
+  gap: clamp(12px, 2vw, 16px);
+}
+
+.gap-responsive-lg {
+  gap: clamp(16px, 3vw, 24px);
+}
+
+.padding-responsive {
+  padding: clamp(12px, 3vw, 16px);
+}
+
+.padding-responsive-lg {
+  padding: clamp(16px, 4vw, 24px);
+}
+
+/* ========================================
+   VISIBILITY HELPERS
+   ======================================== */
+
+/* Hide on mobile, show on tablet+ */
+.hidden-mobile {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .hidden-mobile {
+    display: block;
+  }
+}
+
+/* Hide on tablet+, show on mobile only */
+.hidden-tablet-up {
+  display: block;
+}
+
+@media (min-width: 768px) {
+  .hidden-tablet-up {
+    display: none;
+  }
+}
+
+/* Hide on desktop+, show on mobile and tablet */
+.hidden-desktop-up {
+  display: block;
+}
+
+@media (min-width: 1024px) {
+  .hidden-desktop-up {
+    display: none;
+  }
+}
+
+/* Show only on desktop */
+.show-desktop-only {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .show-desktop-only {
+    display: block;
+  }
+}
+
+/* ========================================
+   CARD LAYOUTS
+   ======================================== */
+
+.card-responsive {
+  border-radius: 12px;
+  padding: clamp(12px, 3vw, 16px);
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+@media (min-width: 768px) {
+  .card-responsive {
+    border-radius: 16px;
+    padding: clamp(16px, 4vw, 24px);
+  }
+}
+
+/* ========================================
+   BUTTON SIZING
+   ======================================== */
+
+.btn-responsive {
+  padding: clamp(10px, 2.5vw, 12px) clamp(16px, 4vw, 24px);
+  font-size: clamp(0.875rem, 2.5vw, 1rem);
+  border-radius: clamp(8px, 2vw, 12px);
+}
+
+.btn-responsive-sm {
+  padding: clamp(8px, 2vw, 10px) clamp(12px, 3vw, 16px);
+  font-size: clamp(0.75rem, 2vw, 0.875rem);
+  border-radius: clamp(6px, 1.5vw, 8px);
+}
+
+.btn-responsive-lg {
+  padding: clamp(12px, 3vw, 16px) clamp(20px, 5vw, 32px);
+  font-size: clamp(1rem, 3vw, 1.125rem);
+  border-radius: clamp(10px, 2.5vw, 14px);
+}
+
+/* ========================================
+   ASPECT RATIOS
+   ======================================== */
+
+.aspect-square {
+  aspect-ratio: 1 / 1;
+}
+
+.aspect-video {
+  aspect-ratio: 16 / 9;
+}
+
+.aspect-card {
+  aspect-ratio: 4 / 3;
+}
+
+/* ========================================
+   MAX WIDTHS
+   ======================================== */
+
+.max-w-mobile {
+  max-width: 375px;
+}
+
+.max-w-tablet {
+  max-width: 768px;
+}
+
+.max-w-desktop {
+  max-width: 1200px;
+}
+
+.max-w-wide {
+  max-width: 1400px;
+}
