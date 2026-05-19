@@ -1,5 +1,5 @@
 import express from "express";
-import diceRouter from "./games/dice/dice.router.js";
+import { diceRouter } from "./routes/index.js";
 import { startGameScheduler } from "./games/engine/scheduler.js";
 import {
   globalErrorHandler,

@@ -1,9 +1,13 @@
 import { Router } from "express";
-import { HttpError } from "../../errors/httpError.js";
-import { placeBet } from "../engine/bet.service.js";
-import { getCurrentRound, getHistory, getMyBets } from "../engine/query.service.js";
-import { authMiddleware } from "../../middleware/auth.middleware.js";
-import { diceConfig } from "./dice.config.js";
+import { HttpError } from "../errors/httpError.js";
+import { diceConfig } from "../games/dice/dice.config.js";
+import {
+  getCurrentRound,
+  getHistory,
+  getMyBets,
+  placeBet,
+} from "../games/engine/bet.service.js";
+import { authMiddleware } from "../middleware/auth.middleware.js";
 
 const router = Router();
 
