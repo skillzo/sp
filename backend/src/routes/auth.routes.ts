@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { getMe, login, register } from "../auth/auth.service.js";
-import { HttpError } from "../errors/httpError.js";
-import { authMiddleware } from "../middleware/auth.middleware.js";
+import { getMe, login, register } from "@/auth/auth.service.js";
+import { authMiddleware } from "@/middleware/auth.middleware.js";
+import { HttpError } from "@/errors/httpError.js";
 
 const router = Router();
 

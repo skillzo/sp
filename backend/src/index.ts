@@ -1,6 +1,11 @@
 import "dotenv/config";
+import cors from "cors";
 import express from "express";
-import { authRouter, diceRouter } from "./routes/index.js";
+import {
+  authRouter,
+  colorPredictionRouter,
+  diceRouter,
+} from "./routes/index.js";
 import { startGameScheduler } from "./games/engine/scheduler.js";
 import {
   globalErrorHandler,
@@ -13,6 +18,12 @@ import logger from "./startup/logger.js";
 const app = express();
 const port = Env.PORT;
 
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
@@ -29,6 +40,7 @@ app.get("/health/db", async (_req, res, next) => {
 });
 
 app.use("/auth", authRouter);
+app.use("/games/color-prediction", colorPredictionRouter);
 app.use("/games/dice", diceRouter);
 
 app.use(globalErrorHandler);

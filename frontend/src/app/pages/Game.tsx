@@ -1,7 +1,18 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { TopBar } from "../components/TopBar";
 import { BackButton } from "../components/BackButton";
 import { useUser } from "../context/UserContext";
+import { useAuth } from "../context/AuthContext";
+import { useSession } from "../context/SessionContext";
+import { ApiError } from "../api/http";
+import {
+  getColorPredictionHistory,
+  getColorPredictionRound,
+  getColorPredictionMyBets,
+  postColorPredictionBet,
+  type ColorHistoryRow,
+  type ColorRound,
+} from "../api/endpoints/colorPredictionApi";
 import { toast } from "sonner";
 import { Shield, RefreshCw, Info } from "lucide-react";
 import { GameFooter } from "../components/GameFooter";
@@ -17,37 +28,23 @@ export function Game() {
     gameBalance,
     updateGameBalance,
   } = useUser();
+  const { openAuthModal } = useAuth();
+  const { token, refreshUser } = useSession();
+
   const [betAmount, setBetAmount] = useState<number>(0);
   const [errorMessage, setErrorMessage] = useState("");
   const [selectedColor, setSelectedColor] = useState<"red" | "blue" | null>(
     null,
   );
-  const [timeLeft, setTimeLeft] = useState(90);
-  const [redStake, setRedStake] = useState(2733);
-  const [blueStake, setBlueStake] = useState(4000);
-  const [redPlayers, setRedPlayers] = useState(17);
-  const [bluePlayers, setBluePlayers] = useState(23);
-  const [recentIncrease, setRecentIncrease] = useState(210);
+  const [apiRound, setApiRound] = useState<ColorRound | null>(null);
+  const [historyRows, setHistoryRows] = useState<ColorHistoryRow[]>([]);
+  const [tick, setTick] = useState(0);
+
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentRound, setCurrentRound] = useState(12);
   const [isSpinning, setIsSpinning] = useState(false);
   const [spinRotation, setSpinRotation] = useState(0);
   const [showResult, setShowResult] = useState(false);
   const [lastWinner, setLastWinner] = useState<GameResult | null>(null);
-  const [gameHistory, setGameHistory] = useState<GameResult[]>([
-    "red",
-    "blue",
-    "blue",
-    "red",
-    "red",
-    "blue",
-    "blue",
-    "red",
-    "blue",
-    "red",
-    "blue",
-    "red",
-  ]);
   const [showProvablyFair, setShowProvablyFair] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [activeTab, setActiveTab] = useState<"yours" | "recent">("yours");
@@ -64,32 +61,23 @@ export function Game() {
     color: "red" | "blue";
     amount: number;
   } | null>(null);
-  const [yourBetHistory, setYourBetHistory] = useState<
-    Array<{
-      round: number;
-      color: GameResult;
-      amount: number;
-      result: string;
-      payout: number;
-    }>
-  >([
-    { round: 11, color: "blue", amount: 100, result: "win", payout: 165 },
-    { round: 10, color: "red", amount: 50, result: "loss", payout: 0 },
-    { round: 9, color: "blue", amount: 200, result: "win", payout: 330 },
-  ]);
+  type YourBetRow = {
+    key: string;
+    roundShort: string;
+    color: GameResult;
+    amount: number;
+    result: string;
+    payout: number;
+  };
 
-  const [serverSeed] = useState("d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9");
-  const [clientSeed, setClientSeed] = useState(
-    "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
-  );
-  const [resultHash] = useState(
-    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-  );
+  const [yourBetHistory, setYourBetHistory] = useState<YourBetRow[]>([]);
 
   const placedBetRef = useRef<{ color: "red" | "blue"; amount: number } | null>(
     null,
   );
-  const currentRoundRef = useRef(12);
+  const placedRoundIdRef = useRef<string | null>(null);
+  const lastRoundIdRef = useRef<string | null>(null);
+  const settlingRef = useRef(false);
 
   const formatCurrency = (amount: number, hideDecimals?: boolean): string => {
     if (currencyPreference === "ngn") {
@@ -99,115 +87,255 @@ export function Game() {
     }
   };
 
-  const totalPool = (redStake + blueStake) / 100;
-  const recentIncreaseDisplay = recentIncrease / 100;
-  const redStakeDisplay = redStake / 100;
-  const blueStakeDisplay = blueStake / 100;
+  const { redStakeDisplay, blueStakeDisplay, redPlayers, bluePlayers } =
+    useMemo(() => {
+      const bets = apiRound?.bets ?? [];
+      let redSum = 0;
+      let blueSum = 0;
+      let redCt = 0;
+      let blueCt = 0;
+      for (const b of bets) {
+        const amt = Number(b.amount);
+        const p = String(b.pick).toUpperCase();
+        if (p === "RED") {
+          redSum += amt;
+          redCt += 1;
+        } else if (p === "BLUE") {
+          blueSum += amt;
+          blueCt += 1;
+        }
+      }
+      return {
+        redStakeDisplay: redSum,
+        blueStakeDisplay: blueSum,
+        redPlayers: redCt,
+        bluePlayers: blueCt,
+      };
+    }, [apiRound]);
+
+  const totalPool = redStakeDisplay + blueStakeDisplay;
+  const recentIncreaseDisplay = totalPool > 0 ? totalPool * 0.05 : 0;
+
+  const filteredChipHistory = useMemo((): GameResult[] => {
+    const out: GameResult[] = [];
+    for (const row of historyRows) {
+      if (row.outcome === "RED") out.push("red");
+      else if (row.outcome === "BLUE") out.push("blue");
+      if (out.length >= 16) break;
+    }
+    return out;
+  }, [historyRows]);
+
+  /** Strip at top uses this array (derived from settled rounds). */
+  const gameHistory = filteredChipHistory;
+
+  const recentBets = useMemo(
+    () =>
+      historyRows.slice(0, 12).map((row) => ({
+        user: `Round ${row.id.slice(0, 6).toUpperCase()}`,
+        color:
+          row.outcome === "RED"
+            ? ("red" as GameResult)
+            : ("blue" as GameResult),
+        amount: 0,
+        time: new Date(row.settlesAt).toLocaleTimeString(undefined, {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      })),
+    [historyRows],
+  );
+
+  const timeLeft = useMemo(() => {
+    if (!apiRound?.locksAt) return 0;
+    const locks = new Date(apiRound.locksAt).getTime();
+    const settles = new Date(apiRound.settlesAt).getTime();
+    const target = apiRound.status === "OPEN" ? locks : settles;
+    return Math.max(0, Math.ceil((target - Date.now()) / 1000));
+  }, [apiRound, tick]);
 
   const potentialWin = betAmount > 0 && selectedColor ? betAmount * 1.65 : 0;
   const potentialWinPercent = betAmount > 0 ? 65 : 0;
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          endRound();
-          setCurrentRound((r) => {
-            const newRound = r + 1;
-            currentRoundRef.current = newRound;
-            return newRound;
-          });
-          return 90;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
+    const t = window.setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
   }, []);
 
-  const endRound = () => {
-    setIsSpinning(true);
-
-    const winner: GameResult = Math.random() > 0.5 ? "red" : "blue";
-    const baseRotation = 720 + 360 * 5;
-    const finalRotation =
-      winner === "red" ? baseRotation + 90 : baseRotation + 270;
-    setSpinRotation(finalRotation);
-    setGameHistory((prev) => [winner, ...prev.slice(0, 11)]);
-
-    const betSnapshot = placedBetRef.current
-      ? { ...placedBetRef.current }
-      : null;
-    const roundNumber = currentRoundRef.current;
-
-    setTimeout(() => {
-      setLastWinner(winner);
-      setShowResult(true);
-
-      if (betSnapshot && betSnapshot.color === winner) {
-        const won = betSnapshot.amount * 1.65;
-        setWinAmount(won);
-        updateGameBalance(won);
-        setResultType("win");
-
-        setYourBetHistory((prev) =>
-          [
-            {
-              round: roundNumber,
-              color: betSnapshot.color,
-              amount: betSnapshot.amount,
-              result: "win",
-              payout: won,
-            },
-            ...prev,
-          ].slice(0, 10),
-        );
-      } else if (betSnapshot && betSnapshot.color !== winner) {
-        setResultType("loss");
-        setWinAmount(betSnapshot.amount);
-
-        setYourBetHistory((prev) =>
-          [
-            {
-              round: roundNumber,
-              color: betSnapshot.color,
-              amount: betSnapshot.amount,
-              result: "loss",
-              payout: 0,
-            },
-            ...prev,
-          ].slice(0, 10),
-        );
-      } else {
-        setResultType("no-bet");
+  useEffect(() => {
+    let cancel = false;
+    const poll = async () => {
+      try {
+        const r = await getColorPredictionRound();
+        if (!cancel) setApiRound(r);
+      } catch {
+        /* ignore transient */
       }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), 1500);
+    return () => {
+      cancel = true;
+      clearInterval(id);
+    };
+  }, []);
 
-      setIsPlaying(false);
-      setPlacedBet(null);
-      placedBetRef.current = null;
+  useEffect(() => {
+    let cancel = false;
+    const poll = async () => {
+      try {
+        const rows = await getColorPredictionHistory();
+        if (!cancel) setHistoryRows(rows);
+      } catch {
+        /* ignore */
+      }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), 4000);
+    return () => {
+      cancel = true;
+      clearInterval(id);
+    };
+  }, []);
 
-      setTimeout(() => {
-        setShowResult(false);
-        setIsSpinning(false);
-        setSpinRotation(0);
-        setLastWinner(null);
-        setShowResultModal(true);
+  useEffect(() => {
+    if (!token) {
+      setYourBetHistory([]);
+      return;
+    }
+    let cancel = false;
+    const load = async () => {
+      try {
+        const rows = await getColorPredictionMyBets(token);
+        if (cancel) return;
+        setYourBetHistory(
+          rows.map((b) => {
+            const amt = Number(b.amount);
+            const pay = Number(b.payout ?? 0);
+            const pick = String(b.pick).toLowerCase();
+            const color: GameResult = pick.includes("blue") ? "blue" : "red";
+            const rid = typeof b.roundId === "string" ? b.roundId : b.id;
+            const roundShort = rid.slice(0, 8);
+            let resultStr = "pending";
+            if (b.round.status === "SETTLED") {
+              if (b.won === true) resultStr = "win";
+              else if (b.won === false) resultStr = "loss";
+            }
+            return {
+              key: b.id,
+              roundShort,
+              color,
+              amount: Math.floor(amt),
+              result: resultStr,
+              payout: Math.floor(pay),
+            };
+          }),
+        );
+      } catch {
+        if (!cancel) setYourBetHistory([]);
+      }
+    };
+    void load();
+    const id = window.setInterval(() => void load(), 6000);
+    return () => {
+      cancel = true;
+      clearInterval(id);
+    };
+  }, [token]);
 
-        setRedPlayers(Math.floor(Math.random() * 20) + 10);
-        setBluePlayers(Math.floor(Math.random() * 20) + 10);
-        setRedStake(Math.floor(Math.random() * 3000) + 2000);
-        setBlueStake(Math.floor(Math.random() * 3000) + 2000);
+  const runWinnerSequence = useCallback(
+    (winner: GameResult, settledRoundId: string) => {
+      setIsSpinning(true);
 
-        setTimeout(() => {
-          setSelectedColor(null);
-          setBetAmount(0);
-        }, 500);
-      }, 3000);
-    }, 4000);
-  };
+      const baseRotation = 720 + 360 * 5;
+      const finalRotation =
+        winner === "red" ? baseRotation + 90 : baseRotation + 270;
+      setSpinRotation(finalRotation);
+
+      const betSnapshot = placedBetRef.current
+        ? { ...placedBetRef.current }
+        : null;
+
+      window.setTimeout(() => {
+        setLastWinner(winner);
+        setShowResult(true);
+
+        const played =
+          !!betSnapshot &&
+          placedRoundIdRef.current !== null &&
+          placedRoundIdRef.current === settledRoundId;
+
+        if (played && betSnapshot!.color === winner) {
+          const won = betSnapshot!.amount * 1.65;
+          setWinAmount(won);
+          setResultType("win");
+        } else if (played) {
+          setResultType("loss");
+          setWinAmount(betSnapshot!.amount);
+        } else {
+          setResultType("no-bet");
+        }
+
+        setIsPlaying(false);
+        setPlacedBet(null);
+        placedBetRef.current = null;
+        placedRoundIdRef.current = null;
+
+        window.setTimeout(() => {
+          setShowResult(false);
+          setIsSpinning(false);
+          setSpinRotation(0);
+          setLastWinner(null);
+          setShowResultModal(true);
+          void refreshUser();
+
+          window.setTimeout(() => {
+            setSelectedColor(null);
+            setBetAmount(0);
+          }, 500);
+        }, 3000);
+      }, 4000);
+    },
+    [refreshUser],
+  );
+
+  useEffect(() => {
+    if (!apiRound?.id) return;
+    const id = apiRound.id;
+    const prev = lastRoundIdRef.current;
+    if (prev === null) {
+      lastRoundIdRef.current = id;
+      return;
+    }
+    if (prev === id) return;
+    if (settlingRef.current) return;
+
+    lastRoundIdRef.current = id;
+    settlingRef.current = true;
+
+    void (async () => {
+      try {
+        const hist = await getColorPredictionHistory();
+        const row = hist.find((h) => h.id === prev) ?? hist[0];
+        const out = row?.outcome;
+        const winner: GameResult = out === "BLUE" ? "blue" : "red";
+        if (out === "RED" || out === "BLUE") {
+          runWinnerSequence(winner, prev);
+        }
+      } finally {
+        window.setTimeout(() => {
+          settlingRef.current = false;
+        }, 9000);
+      }
+    })();
+  }, [apiRound?.id, runWinnerSequence]);
 
   const handlePlaceBet = () => {
+    if (!token) {
+      openAuthModal("login");
+      toast.error("Sign in to place a bet");
+      return;
+    }
     if (!selectedColor) {
       toast.error("Please select a color");
       return;
@@ -221,27 +349,41 @@ export function Game() {
       setTimeout(() => setErrorMessage(""), 3000);
       return;
     }
+    if (!apiRound || apiRound.status !== "OPEN") {
+      toast.error("Round is locked — wait for next round");
+      return;
+    }
+    if (timeLeft <= 0) {
+      toast.error("Betting closed for this round");
+      return;
+    }
 
     setShowBetConfirmation(true);
   };
 
-  const confirmBet = () => {
-    updateGameBalance(-betAmount);
-    setIsPlaying(true);
+  const confirmBet = async () => {
+    if (!token || !selectedColor || !apiRound?.id) return;
 
-    if (selectedColor === "red") {
-      setRedStake((prev) => prev + betAmount * 100);
-      setRedPlayers((prev) => prev + 1);
-    } else {
-      setBlueStake((prev) => prev + betAmount * 100);
-      setBluePlayers((prev) => prev + 1);
+    try {
+      await postColorPredictionBet(token, {
+        pick: selectedColor,
+        amount: betAmount,
+      });
+
+      setIsPlaying(true);
+      setShowBetConfirmation(false);
+      toast.success("Bet placed successfully!");
+
+      placedRoundIdRef.current = apiRound.id;
+      placedBetRef.current = { color: selectedColor, amount: betAmount };
+      setPlacedBet({ color: selectedColor, amount: betAmount });
+
+      await refreshUser();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Bet failed";
+      toast.error(msg);
+      setShowBetConfirmation(false);
     }
-
-    toast.success("Bet placed successfully!");
-    setShowBetConfirmation(false);
-    setPlacedBet({ color: selectedColor!, amount: betAmount });
-    placedBetRef.current = { color: selectedColor!, amount: betAmount };
-    currentRoundRef.current = currentRound;
   };
 
   const formatTime = (seconds: number) => {
@@ -252,39 +394,13 @@ export function Game() {
 
   const isLastFiveSeconds = timeLeft <= 5 && timeLeft > 0;
 
-  const recentBets = [
-    {
-      user: "User_xyz123",
-      color: "red" as GameResult,
-      amount: 5.0,
-      time: "2 min ago",
-    },
-    {
-      user: "User_abc456",
-      color: "blue" as GameResult,
-      amount: 3.0,
-      time: "3 min ago",
-    },
-    {
-      user: "User_def789",
-      color: "red" as GameResult,
-      amount: 1.5,
-      time: "5 min ago",
-    },
-    {
-      user: "User_ghi012",
-      color: "blue" as GameResult,
-      amount: 8.0,
-      time: "7 min ago",
-    },
-  ];
+  const roundLabel =
+    apiRound?.id?.slice(0, 8).toUpperCase() ?? apiRound?.id?.slice(0, 8) ?? "—";
+
+  const latestRevealed = historyRows[0];
 
   const generateNewClientSeed = () => {
-    const newSeed =
-      Math.random().toString(36).substring(2, 15) +
-      Math.random().toString(36).substring(2, 15);
-    setClientSeed(newSeed);
-    toast.success("New client seed generated!");
+    toast.info("Outcome uses server-side seeds — client seed not used.");
   };
 
   const handleDeposit = () => {
@@ -357,7 +473,7 @@ export function Game() {
                 className="text-xl font-bold leading-tight"
                 style={{ color: "#FFFFFF" }}
               >
-                #{currentRound}
+                #{roundLabel}
               </p>
             </div>
             <button
@@ -963,17 +1079,30 @@ export function Game() {
           <button
             onClick={handlePlaceBet}
             disabled={
-              isPlaying || !selectedColor || betAmount <= 0 || isSpinning
+              isPlaying ||
+              !selectedColor ||
+              betAmount <= 0 ||
+              isSpinning ||
+              apiRound?.status !== "OPEN" ||
+              timeLeft <= 0
             }
             className="w-full rounded-lg font-bold text-base transition-all disabled:opacity-50 active:scale-95"
             style={{
               background:
-                !selectedColor || betAmount <= 0 || isPlaying
+                !selectedColor ||
+                betAmount <= 0 ||
+                isPlaying ||
+                apiRound?.status !== "OPEN" ||
+                timeLeft <= 0
                   ? "#9CA3AF"
                   : "linear-gradient(135deg, #FBBF24 0%, #F59E0B 50%, #EF4444 100%)",
               color: "white",
               boxShadow:
-                !selectedColor || betAmount <= 0 || isPlaying
+                !selectedColor ||
+                betAmount <= 0 ||
+                isPlaying ||
+                apiRound?.status !== "OPEN" ||
+                timeLeft <= 0
                   ? "none"
                   : "0 0 20px rgba(251, 191, 36, 0.5)",
               padding: "0.75rem",
@@ -1055,9 +1184,9 @@ export function Game() {
           <div className="w-full flex flex-col" style={{ gap: "0.5rem" }}>
             {activeTab === "yours" ? (
               <>
-                {yourBetHistory.map((bet, index) => (
+                {yourBetHistory.map((bet) => (
                   <div
-                    key={index}
+                    key={bet.key}
                     className="flex items-center justify-between w-full rounded-lg"
                     style={{
                       backgroundColor: "var(--bg-accent)",
@@ -1077,7 +1206,7 @@ export function Game() {
                           className="font-semibold text-sm truncate"
                           style={{ color: "var(--text-primary)" }}
                         >
-                          Round #{bet.round}
+                          Round #{bet.roundShort}
                         </p>
                         <p
                           className="text-xs truncate"
@@ -1091,12 +1220,28 @@ export function Game() {
                       <p
                         className="font-bold text-base whitespace-nowrap"
                         style={{
-                          color: bet.result === "win" ? "#10B981" : "#EF4444",
+                          color:
+                            bet.result === "pending"
+                              ? "var(--text-secondary)"
+                              : bet.result === "win"
+                                ? "#10B981"
+                                : "#EF4444",
                         }}
                       >
-                        {bet.result === "win" ? "+" : "-"}
-                        {formatCurrency(
-                          bet.result === "win" ? bet.payout : bet.amount,
+                        {bet.result === "pending" ? (
+                          <span
+                            style={{ color: "var(--text-secondary)" }}
+                            className="text-xs font-semibold"
+                          >
+                            Live
+                          </span>
+                        ) : (
+                          <>
+                            {bet.result === "win" ? "+" : "-"}
+                            {formatCurrency(
+                              bet.result === "win" ? bet.payout : bet.amount,
+                            )}
+                          </>
                         )}
                       </p>
                     </div>
@@ -1141,7 +1286,7 @@ export function Game() {
                       className="font-bold text-sm shrink-0 whitespace-nowrap"
                       style={{ color: "var(--text-primary)" }}
                     >
-                      {formatCurrency(bet.amount)}
+                      Winner
                     </p>
                   </div>
                 ))}
@@ -1190,7 +1335,7 @@ export function Game() {
                   className="block text-xs font-medium mb-1"
                   style={{ color: "var(--text-primary)" }}
                 >
-                  Server Seed (Hashed)
+                  Current round — server seed hash (commit)
                 </label>
                 <div
                   className="rounded-lg"
@@ -1203,28 +1348,18 @@ export function Game() {
                     className="text-xs font-mono break-all"
                     style={{ color: "var(--text-primary)" }}
                   >
-                    {serverSeed}
+                    {apiRound?.serverSeedHash ?? "—"}
                   </p>
                 </div>
               </div>
 
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label
-                    className="block text-xs font-medium"
-                    style={{ color: "var(--text-primary)" }}
-                  >
-                    Client Seed
-                  </label>
-                  <button
-                    onClick={generateNewClientSeed}
-                    className="flex items-center text-xs font-medium"
-                    style={{ color: "#0A84FF", gap: "0.25rem" }}
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    New
-                  </button>
-                </div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  Last settled — revealed server seed
+                </label>
                 <div
                   className="rounded-lg"
                   style={{
@@ -1236,19 +1371,55 @@ export function Game() {
                     className="text-xs font-mono break-all"
                     style={{ color: "var(--text-primary)" }}
                   >
-                    {clientSeed}
+                    {latestRevealed?.serverSeed ?? "—"}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label
+                    className="block text-xs font-medium"
+                    style={{ color: "var(--text-primary)" }}
+                  >
+                    Client seed
+                  </label>
+                  <button
+                    type="button"
+                    onClick={generateNewClientSeed}
+                    className="flex items-center text-xs font-medium"
+                    style={{ color: "#0A84FF", gap: "0.25rem" }}
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Info
+                  </button>
+                </div>
+                <div
+                  className="rounded-lg"
+                  style={{
+                    backgroundColor: "var(--bg-accent)",
+                    padding: "0.5rem",
+                  }}
+                >
+                  <p
+                    className="text-xs"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Not used — outcome is derived from server seed + round id on
+                    the backend.
                   </p>
                 </div>
               </div>
 
               <button
+                type="button"
                 className="w-full rounded-lg text-white font-medium text-xs"
                 style={{
                   backgroundColor: "#0A84FF",
                   padding: "0.5rem",
                 }}
               >
-                Verify Result
+                Verify using published seed (after round settles)
               </button>
             </div>
           )}
@@ -1580,7 +1751,7 @@ export function Game() {
                       className="text-xs font-bold"
                       style={{ color: "var(--text-primary)" }}
                     >
-                      #{currentRound}
+                      #{roundLabel}
                     </span>
                   </div>
                   <div
@@ -1706,7 +1877,7 @@ export function Game() {
                       className="text-xs font-bold"
                       style={{ color: "var(--text-primary)" }}
                     >
-                      #{currentRound}
+                      #{roundLabel}
                     </span>
                   </div>
                   <div

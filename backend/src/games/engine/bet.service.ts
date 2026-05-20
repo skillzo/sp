@@ -9,11 +9,15 @@ export async function placeBet(
   amount: number,
   config: GameConfig,
 ) {
-  if (!config.validatePick(pick)) {
+  const canonicalPick = config.normalizePick
+    ? config.normalizePick(pick.trim())
+    : pick.trim();
+
+  if (!config.validatePick(canonicalPick)) {
     throw new HttpError(400, "Invalid pick");
   }
 
-  const multiplier = config.getMultiplier(pick);
+  const multiplier = config.getMultiplier(canonicalPick);
   if (!multiplier || multiplier <= 0) {
     throw new HttpError(400, "Invalid multiplier for pick");
   }
@@ -59,7 +63,7 @@ export async function placeBet(
       data: {
         userId,
         roundId: round.id,
-        pick,
+        pick: canonicalPick,
         multiplier: new Prisma.Decimal(multiplier),
         amount: stake,
       },
@@ -90,7 +94,13 @@ export async function getHistory(gameType: GameType, take = 20) {
     where: { gameType, status: RoundStatus.SETTLED },
     orderBy: { settlesAt: "desc" },
     take,
-    select: { id: true, outcome: true, settlesAt: true },
+    select: {
+      id: true,
+      outcome: true,
+      settlesAt: true,
+      serverSeed: true,
+      serverSeedHash: true,
+    },
   });
 }
 

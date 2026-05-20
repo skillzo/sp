@@ -7,4 +7,6 @@ export interface GameConfig {
   deriveOutcome: (serverSeed: string, roundId: string) => string;
   getMultiplier: (pick: string) => number;
   validatePick: (pick: string) => boolean;
+  /** Normalize pick before DB storage + settle compare (e.g. RED/BLUE). */
+  normalizePick?: (pick: string) => string;
 }
