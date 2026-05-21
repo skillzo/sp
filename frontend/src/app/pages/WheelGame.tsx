@@ -1,24 +1,98 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '../context/UserContext';
+import { useAuth } from '../context/AuthContext';
+import { useSession } from '../context/SessionContext';
+import { ApiError } from '../api/http';
+import {
+  getWheelMyBets,
+  postWheelSpin,
+  type WheelMyBetRow,
+  type WheelSpinResult,
+} from '../api/endpoints/wheelApi';
+import { useUserStore } from '../stores/userStore';
 import { toast } from 'sonner';
-import { Menu, Info, Sparkles, History, Shield, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import { Info, Sparkles, History, Shield, Settings, Volume2, VolumeX, Zap } from 'lucide-react';
 import { TopBar } from '../components/TopBar';
 import { BackButton } from '../components/BackButton';
 import { GameFooter } from '../components/GameFooter';
 
+const SPIN_MS = 4000;
+
 type GameResult = {
-  id: number;
+  id: string;
   multiplier: number;
   result: 'win' | 'loss';
   betAmount: number;
   profitLoss: number;
   timestamp: string;
+  segmentIndex?: number;
 };
 
+function pickFromMultiplier(value: number): string {
+  if (value >= 2.5) return '3.0';
+  if (value >= 1.35) return '1.5';
+  return '1.2';
+}
+
+function buildWheelSegments(
+  totalSegments: number,
+  winChance: number,
+  winColor: string,
+) {
+  const winCount = Math.floor((winChance / 100) * totalSegments);
+  return Array.from({ length: totalSegments }, (_, i) => ({
+    angle: (360 / totalSegments) * i,
+    isWin: i < winCount,
+    color:
+      i < winCount
+        ? winColor
+        : i % 3 === 0
+          ? '#1A1F2E'
+          : i % 3 === 1
+            ? '#1E2433'
+            : '#151923',
+  }));
+}
+
+function rotationForSegmentIndex(
+  segmentIndex: number,
+  totalSegments: number,
+  currentRotation: number,
+  extraSpins = 5,
+): number {
+  const segmentAngle = 360 / totalSegments;
+  const centerAngle = segmentAngle * (segmentIndex + 0.5);
+  const offset = 360 - centerAngle;
+  const mod = ((offset - (currentRotation % 360)) + 360) % 360;
+  return currentRotation + extraSpins * 360 + mod;
+}
+
+function mapMyBet(row: WheelMyBetRow): GameResult {
+  const betAmount = Number(row.amount);
+  const payout = row.payout != null ? Number(row.payout) : 0;
+  const won = row.won === true;
+  const outcome = row.round.outcome ?? '';
+  const segmentIndex = outcome.includes(':')
+    ? Number(outcome.split(':')[0])
+    : undefined;
+
+  return {
+    id: row.id,
+    multiplier: Number(row.multiplier),
+    result: won ? 'win' : 'loss',
+    betAmount,
+    profitLoss: won ? payout - betAmount : -betAmount,
+    timestamp: new Date(row.createdAt).toLocaleTimeString(),
+    segmentIndex: Number.isFinite(segmentIndex) ? segmentIndex : undefined,
+  };
+}
+
 export function WheelGame() {
-  const { gameBalance, updateGameBalance, formatUSDT } = useUser();
-  const navigate = useNavigate();
+  const { gameBalance, formatUSDT } = useUser();
+  const { token, refreshUser } = useSession();
+  const { openAuthModal } = useAuth();
+  const autoRunningRef = useRef(false);
+  const rotationRef = useRef(0);
   const [betAmount, setBetAmount] = useState<number>(10);
   const [autoBetAmount, setAutoBetAmount] = useState<number>(1);
   const [selectedMultiplier, setSelectedMultiplier] = useState<{ value: number; label: string; chance: number; color: string }>({
@@ -52,12 +126,12 @@ export function WheelGame() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [animationEnabled, setAnimationEnabled] = useState(true);
   
-  // Fairness
-  const [serverSeed] = useState('a7f2d9e4c8b3a1f6e9d2c5b8a4e7d1c9');
-  const [clientSeed, setClientSeed] = useState('c3f8e2a9d7b4f1e6a8c2d5b9e3f7a1d4');
-  const [nonce, setNonce] = useState(1);
-  
-  // Game history
+  const [lastFairness, setLastFairness] = useState<{
+    serverSeedHash: string;
+    serverSeed: string | null;
+    roundId: string;
+  } | null>(null);
+
   const [gameHistory, setGameHistory] = useState<GameResult[]>([]);
 
   const multiplierOptions = [
@@ -66,107 +140,123 @@ export function WheelGame() {
     { value: 3.0, label: 'Risky', chance: 25, color: '#EF4444' }
   ];
 
-  // Generate wheel segments with random color distribution
-  const generateWheelSegments = () => {
-    const totalSegments = segments;
-    const winSegments = Math.floor((selectedMultiplier.chance / 100) * totalSegments);
-    
-    // Create array of win/loss markers
-    const markers = Array(totalSegments).fill(false);
-    const winIndices: number[] = [];
-    
-    // Randomly distribute win segments
-    while (winIndices.length < winSegments) {
-      const randomIndex = Math.floor(Math.random() * totalSegments);
-      if (!markers[randomIndex]) {
-        markers[randomIndex] = true;
-        winIndices.push(randomIndex);
-      }
-    }
-    
-    // Create segments
-    const segs = [];
-    for (let i = 0; i < totalSegments; i++) {
-      segs.push({
-        angle: (360 / totalSegments) * i,
-        isWin: markers[i],
-        color: markers[i] ? selectedMultiplier.color : (i % 3 === 0 ? '#1A1F2E' : i % 3 === 1 ? '#1E2433' : '#151923')
-      });
-    }
-    
-    return segs;
-  };
+  const wheelSegments = useMemo(
+    () =>
+      buildWheelSegments(
+        segments,
+        selectedMultiplier.chance,
+        selectedMultiplier.color,
+      ),
+    [segments, selectedMultiplier],
+  );
 
-  const wheelSegments = generateWheelSegments();
+  useEffect(() => {
+    rotationRef.current = rotation;
+  }, [rotation]);
+
+  const loadMyBets = useCallback(async () => {
+    if (!token) return;
+    try {
+      const rows = await getWheelMyBets(token);
+      setGameHistory(rows.map(mapMyBet).slice(0, 20));
+    } catch {
+      /* ignore poll errors */
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void loadMyBets();
+  }, [loadMyBets]);
   const potentialWin = betAmount * selectedMultiplier.value;
   const autoPotentialWin = autoBetAmount * selectedMultiplier.value;
   const totalAutoBet = autoBetAmount * autoSpins;
 
-  const handleSpin = () => {
-    if (betAmount <= 0) {
-      toast.error('Please enter a valid bet amount');
-      return;
+  const appendHistory = (result: WheelSpinResult) => {
+    const betAmount = Number(result.amount);
+    const payout = Number(result.payout);
+    const profit = Number(result.profit);
+    setGameHistory((prev) =>
+      [
+        {
+          id: result.betId,
+          multiplier: result.multiplier,
+          result: result.won ? 'win' : 'loss',
+          betAmount,
+          profitLoss: profit,
+          timestamp: new Date(result.settlesAt).toLocaleTimeString(),
+          segmentIndex: result.segmentIndex,
+        },
+        ...prev,
+      ].slice(0, 20),
+    );
+  };
+
+  const finishSpinUi = (result: WheelSpinResult) => {
+    const payout = Number(result.payout);
+    if (result.won) {
+      setWinAmount(payout);
+      setIsWin(true);
+      setShowWinPopup(true);
+    } else {
+      setIsWin(false);
+      toast.error('Better luck next time!');
     }
-    if (betAmount > gameBalance) {
+    setIsSpinning(false);
+    setShowResult(true);
+    setTimeout(() => setShowResult(false), 2000);
+  };
+
+  const executeSpin = async (amount: number): Promise<WheelSpinResult | null> => {
+    if (!token) {
+      openAuthModal('login');
+      return null;
+    }
+    if (amount <= 0) {
+      toast.error('Please enter a valid bet amount');
+      return null;
+    }
+    if (amount > gameBalance) {
       toast.error('Insufficient balance');
-      return;
+      return null;
     }
 
     setIsSpinning(true);
-    updateGameBalance(-betAmount);
-    setNonce(prev => prev + 1);
 
-    const spins = 5 + Math.random() * 3;
-    const randomAngle = Math.random() * 360;
-    const finalRotation = rotation + (spins * 360) + randomAngle;
-    setRotation(finalRotation);
+    try {
+      const result = await postWheelSpin(token, {
+        pick: pickFromMultiplier(selectedMultiplier.value),
+        amount,
+        segments,
+      });
 
-    setTimeout(() => {
-      const normalizedAngle = finalRotation % 360;
-      const segmentAngle = 360 / wheelSegments.length;
-      const segmentIndex = Math.floor(normalizedAngle / segmentAngle);
-      const landedSegment = wheelSegments[segmentIndex];
+      setLastFairness({
+        serverSeedHash: result.serverSeedHash,
+        serverSeed: result.serverSeed,
+        roundId: result.roundId,
+      });
 
-      if (landedSegment.isWin) {
-        const won = betAmount * selectedMultiplier.value;
-        setWinAmount(won);
-        updateGameBalance(won);
-        setIsWin(true);
-        
-        // Add to history - MANDATORY
-        setGameHistory(prev => [{
-          id: Date.now(),
-          multiplier: selectedMultiplier.value,
-          result: 'win',
-          betAmount,
-          profitLoss: won - betAmount,
-          timestamp: new Date().toLocaleTimeString()
-        }, ...prev].slice(0, 10));
-        
-        setShowWinPopup(true);
-      } else {
-        setIsWin(false);
-        
-        // Add to history - MANDATORY
-        setGameHistory(prev => [{
-          id: Date.now(),
-          multiplier: selectedMultiplier.value,
-          result: 'loss',
-          betAmount,
-          profitLoss: -betAmount,
-          timestamp: new Date().toLocaleTimeString()
-        }, ...prev].slice(0, 10));
-        
-        toast.error('Better luck next time!');
-      }
-      
+      const nextRotation = rotationForSegmentIndex(
+        result.segmentIndex,
+        result.segments,
+        rotationRef.current,
+      );
+      setRotation(nextRotation);
+
+      await new Promise((resolve) => setTimeout(resolve, SPIN_MS));
+
+      appendHistory(result);
+      finishSpinUi(result);
+      await refreshUser();
+      return result;
+    } catch (e) {
       setIsSpinning(false);
-      setShowResult(true);
-      
-      setTimeout(() => {
-        setShowResult(false);
-      }, 2000);
-    }, 4000);
+      toast.error(e instanceof ApiError ? e.message : 'Spin failed');
+      return null;
+    }
+  };
+
+  const handleSpin = () => {
+    void executeSpin(betAmount);
   };
 
   const handleCollect = () => {
@@ -176,124 +266,70 @@ export function WheelGame() {
 
   const handlePlayAgain = () => {
     setShowWinPopup(false);
-    handleSpin();
+    void executeSpin(betAmount);
   };
 
   const startAutoPlay = async () => {
+    if (!token) {
+      openAuthModal('login');
+      return;
+    }
     if (autoBetAmount <= 0) {
       toast.error('Please enter a valid bet amount');
       return;
     }
-    if (autoBetAmount > gameBalance) {
-      toast.error('Insufficient balance');
-      return;
-    }
 
     setIsAutoRunning(true);
+    autoRunningRef.current = true;
     setAutoSpinsRemaining(autoSpins);
-    
+
     let spinsLeft = autoSpins;
     let totalProfitLoss = 0;
-    
-    const runAutoSpin = async () => {
-      if (spinsLeft <= 0) {
-        setIsAutoRunning(false);
-        setAutoSpinsRemaining(0);
-        toast.success('Auto spin completed!');
-        return;
-      }
-      
-      if (autoBetAmount > gameBalance) {
-        setIsAutoRunning(false);
-        setAutoSpinsRemaining(0);
+
+    while (spinsLeft > 0 && autoRunningRef.current) {
+      await refreshUser();
+      const balance = useUserStore.getState().gameBalance;
+      if (autoBetAmount > balance) {
         toast.error('Insufficient balance to continue');
-        return;
+        break;
       }
-      
-      // Check stop conditions
+
       if (totalProfitLoss >= stopOnProfit) {
-        setIsAutoRunning(false);
-        setAutoSpinsRemaining(0);
-        toast.success(`Auto stopped: Profit target reached! +${formatUSDT(totalProfitLoss)}`);
-        return;
+        toast.success(
+          `Auto stopped: Profit target reached! +${formatUSDT(totalProfitLoss)}`,
+        );
+        break;
       }
-      
+
       if (Math.abs(totalProfitLoss) >= stopOnLoss && totalProfitLoss < 0) {
-        setIsAutoRunning(false);
-        setAutoSpinsRemaining(0);
-        toast.error(`Auto stopped: Loss limit reached! ${formatUSDT(totalProfitLoss)}`);
-        return;
+        toast.error(
+          `Auto stopped: Loss limit reached! ${formatUSDT(totalProfitLoss)}`,
+        );
+        break;
       }
-      
-      setIsSpinning(true);
-      updateGameBalance(-autoBetAmount);
-      setNonce(prev => prev + 1);
 
-      const spins = 5 + Math.random() * 3;
-      const randomAngle = Math.random() * 360;
-      const finalRotation = rotation + (spins * 360) + randomAngle;
-      setRotation(finalRotation);
+      const result = await executeSpin(autoBetAmount);
+      if (!result) break;
 
-      setTimeout(() => {
-        const normalizedAngle = finalRotation % 360;
-        const segmentAngle = 360 / wheelSegments.length;
-        const segmentIndex = Math.floor(normalizedAngle / segmentAngle);
-        const landedSegment = wheelSegments[segmentIndex];
+      totalProfitLoss += Number(result.profit);
+      spinsLeft -= 1;
+      setAutoSpinsRemaining(spinsLeft);
 
-        let profitLoss = 0;
+      if (spinsLeft > 0 && autoRunningRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
 
-        if (landedSegment.isWin) {
-          const won = autoBetAmount * selectedMultiplier.value;
-          profitLoss = won - autoBetAmount;
-          updateGameBalance(won);
-          
-          // Add to history - MANDATORY
-          setGameHistory(prev => [{
-            id: Date.now() + Math.random(),
-            multiplier: selectedMultiplier.value,
-            result: 'win',
-            betAmount: autoBetAmount,
-            profitLoss,
-            timestamp: new Date().toLocaleTimeString()
-          }, ...prev].slice(0, 10));
-        } else {
-          profitLoss = -autoBetAmount;
-          
-          // Add to history - MANDATORY
-          setGameHistory(prev => [{
-            id: Date.now() + Math.random(),
-            multiplier: selectedMultiplier.value,
-            result: 'loss',
-            betAmount: autoBetAmount,
-            profitLoss,
-            timestamp: new Date().toLocaleTimeString()
-          }, ...prev].slice(0, 10));
-        }
-        
-        totalProfitLoss += profitLoss;
-        setIsSpinning(false);
-        spinsLeft--;
-        setAutoSpinsRemaining(spinsLeft);
-        
-        // Delay before next spin
-        setTimeout(() => {
-          if (spinsLeft > 0 && isAutoRunning) {
-            runAutoSpin();
-          } else {
-            setIsAutoRunning(false);
-            setAutoSpinsRemaining(0);
-            if (spinsLeft === 0) {
-              toast.success('Auto spin completed!');
-            }
-          }
-        }, 1500);
-      }, 4000);
-    };
-    
-    runAutoSpin();
+    autoRunningRef.current = false;
+    setIsAutoRunning(false);
+    setAutoSpinsRemaining(0);
+    if (spinsLeft === 0) {
+      toast.success('Auto spin completed!');
+    }
   };
 
   const stopAutoPlay = () => {
+    autoRunningRef.current = false;
     setIsAutoRunning(false);
     setAutoSpinsRemaining(0);
     toast.info('Auto mode stopped');
@@ -311,7 +347,7 @@ export function WheelGame() {
         <div className="flex items-center justify-between w-full max-w-[480px] md:max-w-[768px] lg:max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8">
           <h1 className="text-lg font-bold" style={{ color: '#FFFFFF' }}>Wheel Game</h1>
           <div className="flex gap-2">
-            <button onClick={() => setShowHistory(true)} className="p-1.5 hover:bg-white/5 rounded-lg transition-all">
+            <button onClick={() => { setShowHistory(true); void loadMyBets(); }} className="p-1.5 hover:bg-white/5 rounded-lg transition-all">
               <History className="w-5 h-5" style={{ color: '#94A3B8' }} />
             </button>
             <button onClick={() => setShowSettings(true)} className="p-1.5 hover:bg-white/5 rounded-lg transition-all">
@@ -368,7 +404,7 @@ export function WheelGame() {
                 viewBox="0 0 400 400"
                 style={{ 
                   transform: `rotate(${rotation}deg)`,
-                  transition: isSpinning && animationEnabled ? 'transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99)' : 'none',
+                  transition: isSpinning && animationEnabled ? `transform ${SPIN_MS}ms cubic-bezier(0.17, 0.67, 0.12, 0.99)` : 'none',
                   filter: isSpinning ? 'blur(1.5px)' : 'drop-shadow(0 8px 25px rgba(0, 0, 0, 0.4))'
                 }}
               >
@@ -427,6 +463,7 @@ export function WheelGame() {
               <button
                 key={option.label}
                 onClick={() => setSelectedMultiplier(option)}
+                disabled={isSpinning || isAutoRunning}
                 className="rounded-xl p-3.5 transition-all hover:scale-105 active:scale-95"
                 style={{
                   background: selectedMultiplier.value === option.value 
@@ -514,7 +551,7 @@ export function WheelGame() {
             {/* Spin Button */}
             <button
               onClick={handleSpin}
-              disabled={isSpinning || betAmount <= 0}
+              disabled={isSpinning || isAutoRunning || betAmount <= 0}
               className="w-full py-4 rounded-xl font-bold text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed mb-4 hover:scale-105 active:scale-95"
               style={{
                 background: 'linear-gradient(135deg, #0EA5E9 0%, #0A84FF 50%, #2563EB 100%)',
@@ -653,6 +690,7 @@ export function WheelGame() {
                   <button
                     key={option.label}
                     onClick={() => setSelectedMultiplier(option)}
+                disabled={isSpinning || isAutoRunning}
                     className="rounded-lg p-3 transition-all hover:scale-105 active:scale-95"
                     style={{
                       background: selectedMultiplier.value === option.value 
@@ -847,23 +885,29 @@ export function WheelGame() {
             
             <div className="space-y-3 mb-5">
               <div className="rounded-lg p-3" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
-                <p className="text-xs font-semibold mb-1" style={{ color: '#94A3B8' }}>Server Seed (Hashed)</p>
-                <p className="text-xs font-mono break-all" style={{ color: '#FFFFFF' }}>{serverSeed}</p>
+                <p className="text-xs font-semibold mb-1" style={{ color: '#94A3B8' }}>Server Seed Hash</p>
+                <p className="text-xs font-mono break-all" style={{ color: '#FFFFFF' }}>
+                  {lastFairness?.serverSeedHash ?? '—'}
+                </p>
               </div>
 
               <div className="rounded-lg p-3" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
-                <p className="text-xs font-semibold mb-1" style={{ color: '#94A3B8' }}>Client Seed</p>
-                <p className="text-xs font-mono break-all" style={{ color: '#FFFFFF' }}>{clientSeed}</p>
+                <p className="text-xs font-semibold mb-1" style={{ color: '#94A3B8' }}>Revealed Server Seed</p>
+                <p className="text-xs font-mono break-all" style={{ color: '#FFFFFF' }}>
+                  {lastFairness?.serverSeed ?? 'Spin to reveal'}
+                </p>
               </div>
 
               <div className="rounded-lg p-3" style={{ backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
-                <p className="text-xs font-semibold mb-1" style={{ color: '#94A3B8' }}>Nonce</p>
-                <p className="text-xl font-bold" style={{ color: '#FFFFFF' }}>{nonce}</p>
+                <p className="text-xs font-semibold mb-1" style={{ color: '#94A3B8' }}>Round ID</p>
+                <p className="text-xs font-mono break-all" style={{ color: '#FFFFFF' }}>
+                  {lastFairness?.roundId ?? '—'}
+                </p>
               </div>
             </div>
 
             <button
-              onClick={() => toast.success('Result verified!')}
+              onClick={() => toast.success('Verify with server seed + round ID on backend')}
               className="w-full py-3 rounded-xl font-semibold transition-all hover:scale-105 active:scale-95"
               style={{ backgroundColor: '#34D399', color: '#FFFFFF', boxShadow: '0 8px 25px rgba(52, 211, 153, 0.4)' }}
             >
@@ -906,12 +950,12 @@ export function WheelGame() {
                 <select
                   value={segments}
                   onChange={(e) => setSegments(Number(e.target.value))}
+                  disabled={isSpinning || isAutoRunning}
                   className="w-full px-4 py-3 rounded-lg font-semibold transition-all"
                   style={{ backgroundColor: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(148, 163, 184, 0.15)', color: '#FFFFFF' }}
                 >
                   <option value={20}>20</option>
                   <option value={50}>50</option>
-                  <option value={100}>100</option>
                 </select>
               </div>
 

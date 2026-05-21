@@ -78,6 +78,9 @@ export function Game() {
   const placedRoundIdRef = useRef<string | null>(null);
   const lastRoundIdRef = useRef<string | null>(null);
   const settlingRef = useRef(false);
+  const settlementPollCancelRef = useRef(false);
+
+  const [isAwaitingOutcome, setIsAwaitingOutcome] = useState(false);
 
   const formatCurrency = (amount: number, hideDecimals?: boolean): string => {
     if (currencyPreference === "ngn") {
@@ -153,6 +156,8 @@ export function Game() {
     const target = apiRound.status === "OPEN" ? locks : settles;
     return Math.max(0, Math.ceil((target - Date.now()) / 1000));
   }, [apiRound, tick]);
+
+  const hasActiveRound = apiRound != null;
 
   const potentialWin = betAmount > 0 && selectedColor ? betAmount * 1.65 : 0;
   const potentialWinPercent = betAmount > 0 ? 65 : 0;
@@ -312,15 +317,29 @@ export function Game() {
 
     lastRoundIdRef.current = id;
     settlingRef.current = true;
+    settlementPollCancelRef.current = false;
+    setIsAwaitingOutcome(true);
 
     void (async () => {
       try {
-        const hist = await getColorPredictionHistory();
-        const row = hist.find((h) => h.id === prev) ?? hist[0];
-        const out = row?.outcome;
-        const winner: GameResult = out === "BLUE" ? "blue" : "red";
-        if (out === "RED" || out === "BLUE") {
-          runWinnerSequence(winner, prev);
+        while (!settlementPollCancelRef.current) {
+          try {
+            const hist = await getColorPredictionHistory();
+            if (settlementPollCancelRef.current) return;
+
+            const row = hist.find((h) => h.id === prev);
+            const out = row?.outcome;
+            if (out === "RED" || out === "BLUE") {
+              setIsAwaitingOutcome(false);
+              const winner: GameResult = out === "BLUE" ? "blue" : "red";
+              runWinnerSequence(winner, prev);
+              return;
+            }
+          } catch {
+            /* retry on transient errors */
+          }
+
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
         }
       } finally {
         window.setTimeout(() => {
@@ -328,6 +347,10 @@ export function Game() {
         }, 9000);
       }
     })();
+
+    return () => {
+      settlementPollCancelRef.current = true;
+    };
   }, [apiRound?.id, runWinnerSequence]);
 
   const handlePlaceBet = () => {
@@ -350,7 +373,9 @@ export function Game() {
       return;
     }
     if (!apiRound || apiRound.status !== "OPEN") {
-      toast.error("Round is locked — wait for next round");
+      toast.error(
+        apiRound ? "Round is locked — wait for next round" : "Waiting for next round…",
+      );
       return;
     }
     if (timeLeft <= 0) {
@@ -394,8 +419,9 @@ export function Game() {
 
   const isLastFiveSeconds = timeLeft <= 5 && timeLeft > 0;
 
-  const roundLabel =
-    apiRound?.id?.slice(0, 8).toUpperCase() ?? apiRound?.id?.slice(0, 8) ?? "—";
+  const roundLabel = apiRound?.id
+    ? apiRound.id.slice(0, 8).toUpperCase()
+    : "…";
 
   const latestRevealed = historyRows[0];
 
@@ -807,6 +833,36 @@ export function Game() {
                   </p>
                   <div className="text-3xl">🎰</div>
                 </>
+              ) : isAwaitingOutcome ? (
+                <>
+                  <p
+                    className="text-xs font-semibold mb-1"
+                    style={{ color: "#6B7280" }}
+                  >
+                    RESOLVING
+                  </p>
+                  <p
+                    className="text-2xl font-bold"
+                    style={{ color: "#FBBF24" }}
+                  >
+                    PENDING
+                  </p>
+                </>
+              ) : !hasActiveRound ? (
+                <>
+                  <p
+                    className="text-xs font-semibold mb-1"
+                    style={{ color: "#6B7280" }}
+                  >
+                    ROUND
+                  </p>
+                  <p
+                    className="text-sm font-bold leading-snug"
+                    style={{ color: "#94A3B8" }}
+                  >
+                    Starting next round…
+                  </p>
+                </>
               ) : showResult ? (
                 <>
                   <p className="text-2xl mb-1">
@@ -1083,6 +1139,8 @@ export function Game() {
               !selectedColor ||
               betAmount <= 0 ||
               isSpinning ||
+              isAwaitingOutcome ||
+              !hasActiveRound ||
               apiRound?.status !== "OPEN" ||
               timeLeft <= 0
             }
@@ -1092,6 +1150,8 @@ export function Game() {
                 !selectedColor ||
                 betAmount <= 0 ||
                 isPlaying ||
+                isAwaitingOutcome ||
+                !hasActiveRound ||
                 apiRound?.status !== "OPEN" ||
                 timeLeft <= 0
                   ? "#9CA3AF"
@@ -1101,6 +1161,8 @@ export function Game() {
                 !selectedColor ||
                 betAmount <= 0 ||
                 isPlaying ||
+                isAwaitingOutcome ||
+                !hasActiveRound ||
                 apiRound?.status !== "OPEN" ||
                 timeLeft <= 0
                   ? "none"
@@ -1108,7 +1170,13 @@ export function Game() {
               padding: "0.75rem",
             }}
           >
-            {isPlaying ? "✓ BET PLACED" : "PLACE BET"}
+            {isPlaying
+              ? "✓ BET PLACED"
+              : !hasActiveRound
+                ? "WAITING FOR ROUND"
+                : isAwaitingOutcome
+                  ? "RESOLVING…"
+                  : "PLACE BET"}
           </button>
         </div>
 
@@ -1230,10 +1298,10 @@ export function Game() {
                       >
                         {bet.result === "pending" ? (
                           <span
-                            style={{ color: "var(--text-secondary)" }}
+                            style={{ color: "#FBBF24" }}
                             className="text-xs font-semibold"
                           >
-                            Live
+                            Pending
                           </span>
                         ) : (
                           <>

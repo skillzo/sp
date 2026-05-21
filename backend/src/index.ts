@@ -5,6 +5,7 @@ import {
   authRouter,
   colorPredictionRouter,
   diceRouter,
+  wheelRouter,
 } from "./routes/index.js";
 import { startGameScheduler } from "./games/engine/scheduler.js";
 import {
@@ -42,6 +43,7 @@ app.get("/health/db", async (_req, res, next) => {
 app.use("/auth", authRouter);
 app.use("/games/color-prediction", colorPredictionRouter);
 app.use("/games/dice", diceRouter);
+app.use("/games/wheel", wheelRouter);
 
 app.use(globalErrorHandler);
 
